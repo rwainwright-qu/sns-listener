@@ -38,7 +38,7 @@ function nowEntry(note, req, extra = {}) {
 }
 
 function parseInnerMessage(body) {
-  const candidate = body?.Message ?? body;
+  const candidate = body && body.Message ? body.Message : body;
 
   if (typeof candidate === "string") {
     try {
@@ -53,9 +53,11 @@ function parseInnerMessage(body) {
 
 function getEventLabel(req) {
   const payload = parseInnerMessage(req.body);
-  const entityType = payload?.entityType || payload?.EntityType || "UnknownEntity";
-  const eventType = payload?.eventType || payload?.EventType || "UnknownEvent";
-  return `[${entityType}] - [${eventType}]`;
+  const entityType =
+    (payload && (payload.entityType || payload.EntityType)) || "UnknownEntity";
+  const eventType =
+    (payload && (payload.eventType || payload.EventType)) || "UnknownEvent";
+  return "[" + entityType + "] - [" + eventType + "]";
 }
 
 function serializeEvent(e) {
@@ -71,15 +73,6 @@ function serializeEvent(e) {
   };
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 // Capture raw body so we can verify signatures
 app.use(morgan("tiny"));
 app.use(async (req, res, next) => {
@@ -87,6 +80,7 @@ app.use(async (req, res, next) => {
     try {
       req.raw = (await getRawBody(req)).toString("utf8");
       const ct = (req.headers["content-type"] || "").toLowerCase();
+
       if (ct.includes("application/json")) {
         try {
           req.body = JSON.parse(req.raw || "{}");
@@ -100,14 +94,11 @@ app.use(async (req, res, next) => {
       return res.status(400).send("Unable to read body");
     }
   }
+
   next();
 });
 
 // =================== AWS SNS signature verification ===================
-// This matches AWS’ published algorithm:
-// 1) Build string-to-sign based on Message/Subject/Timestamp/TopicArn/Type
-// 2) Download SigningCertURL (must be from *.amazonaws.com/* or *.amazonaws.com.cn/*)
-// 3) Verify Base64 Signature with SHA1withRSA against X.509 cert public key
 
 function isTrustedCertUrl(urlString) {
   try {
@@ -117,6 +108,7 @@ function isTrustedCertUrl(urlString) {
     const domainOk =
       host.endsWith(".amazonaws.com") ||
       host.endsWith(".amazonaws.com.cn");
+
     return isHttps && domainOk;
   } catch {
     return false;
@@ -172,11 +164,13 @@ async function verifySnsSignature(req) {
   const stringToSign = buildStringToSign(messageType, msg);
   if (!stringToSign) return false;
 
-  const cache = verifySnsSignature._cache || (verifySnsSignature._cache = new Map());
+  const cache =
+    verifySnsSignature._cache || (verifySnsSignature._cache = new Map());
+
   let pem = cache.get(certUrl);
 
   if (!pem) {
-    const r = await fetch(certUrl, { timeout: 10_000 });
+    const r = await fetch(certUrl, { timeout: 10000 });
     if (!r.ok) return false;
     pem = await r.text();
     cache.set(certUrl, pem);
@@ -202,11 +196,11 @@ app.post("/webhook", async (req, res) => {
     messageType === "SubscriptionConfirmation" ||
     messageType === "UnsubscribeConfirmation"
   ) {
-    const url = req.body?.SubscribeURL;
+    const url = req.body && req.body.SubscribeURL;
 
     if (url) {
       try {
-        const r = await fetch(url, { timeout: 10_000 });
+        const r = await fetch(url, { timeout: 10000 });
         pushEvent(
           nowEntry("Confirmed AWS SNS subscription link", req, {
             confirmStatus: r.status,
@@ -233,6 +227,7 @@ app.post("/webhook", async (req, res) => {
   }
 
   const eventLabel = getEventLabel(req);
+
   pushEvent(
     nowEntry(eventLabel, req, {
       verified
@@ -389,7 +384,7 @@ app.get("/", (_req, res) => {
   <div id="eventList" class="event-list"></div>
 
   <div id="modalBackdrop" class="modal-backdrop">
-    <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal">
       <div class="modal-header">
         <div>
           <div id="modalTitle" class="event-title"></div>
@@ -433,29 +428,34 @@ app.get("/", (_req, res) => {
     const container = document.getElementById("eventList");
 
     if (!events.length) {
-      container.innerHTML = "<p><i>No events yet…</i></p>";
+      container.innerHTML = "<p><i>No events yet...</i></p>";
       return;
     }
 
-    container.innerHTML = events.map((e) => \`
-      <div class="event-row" data-id="\${escapeHtmlClient(e.id)}">
-        <div class="event-title">\${escapeHtmlClient(e.note)}</div>
-        <div class="event-time">\${escapeHtmlClient(e.when)} — id: \${escapeHtmlClient(e.id)}</div>
-      </div>
-    \`).join("");
+    container.innerHTML = events.map(function (e) {
+      return '<div class="event-row" data-id="' + escapeHtmlClient(e.id) + '">' +
+        '<div class="event-title">' + escapeHtmlClient(e.note) + "</div>" +
+        '<div class="event-time">' + escapeHtmlClient(e.when) + ' - id: ' + escapeHtmlClient(e.id) + "</div>" +
+      "</div>";
+    }).join("");
 
-    for (const row of container.querySelectorAll(".event-row")) {
-      row.addEventListener("click", () => openModal(row.dataset.id));
-    }
+    Array.from(container.querySelectorAll(".event-row")).forEach(function (row) {
+      row.addEventListener("click", function () {
+        openModal(row.dataset.id);
+      });
+    });
   }
 
   function openModal(id) {
     selectedEventId = id;
-    const e = events.find((x) => x.id === id);
+    const e = events.find(function (x) {
+      return x.id === id;
+    });
+
     if (!e) return;
 
     document.getElementById("modalTitle").textContent = e.note;
-    document.getElementById("modalTime").textContent = e.when + " — id: " + e.id;
+    document.getElementById("modalTime").textContent = e.when + " - id: " + e.id;
     document.getElementById("modalMeta").innerHTML =
       "<p><b>Signature verified:</b> " +
       (e.verified === true ? "yes" : e.verified === false ? "no" : "unknown") +
@@ -479,21 +479,24 @@ app.get("/", (_req, res) => {
       renderList();
 
       if (selectedEventId) {
-        const stillExists = events.some((e) => e.id === selectedEventId);
+        const stillExists = events.some(function (e) {
+          return e.id === selectedEventId;
+        });
+
         if (stillExists) {
           openModal(selectedEventId);
         } else {
           closeModal();
         }
       }
-    } catch {
-      // Ignore refresh failures and keep current UI state
+    } catch (err) {
+      // Keep current UI state on refresh failures
     }
   }
 
   document.getElementById("refreshBtn").addEventListener("click", refreshEvents);
   document.getElementById("closeBtn").addEventListener("click", closeModal);
-  document.getElementById("modalBackdrop").addEventListener("click", (event) => {
+  document.getElementById("modalBackdrop").addEventListener("click", function (event) {
     if (event.target.id === "modalBackdrop") {
       closeModal();
     }
@@ -508,5 +511,5 @@ app.get("/", (_req, res) => {
 
 // =================== start ===================
 app.listen(PORT, () => {
-  console.log(\`SNS listener running on http://0.0.0.0:\${PORT}\`);
+  console.log("SNS listener running on http://0.0.0.0:" + PORT);
 });
