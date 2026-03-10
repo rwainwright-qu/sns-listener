@@ -58,14 +58,36 @@ function getEventPayload(reqOrEventBody) {
   return parseInnerMessage(reqOrEventBody);
 }
 
+function getCompanyId(payload) {
+  return (
+    (payload &&
+      (payload.companyId ||
+        payload.CompanyId ||
+        payload.companyID ||
+        payload.company ||
+        payload.Company)) ||
+    ""
+  );
+}
+
+function getEntityType(payload) {
+  return (
+    (payload && (payload.entityType || payload.EntityType)) || ""
+  );
+}
+
+function getEventType(payload) {
+  return (
+    (payload && (payload.eventType || payload.EventType)) || ""
+  );
+}
+
 function getEventLabel(req) {
   const payload = getEventPayload(req);
-  const companyId =
-    (payload && (payload.companyId || payload.CompanyId || payload.companyID)) || "UnknownCompany";
-  const entityType =
-    (payload && (payload.entityType || payload.EntityType)) || "UnknownEntity";
-  const eventType =
-    (payload && (payload.eventType || payload.EventType)) || "UnknownEvent";
+
+  const companyId = getCompanyId(payload) || "UnknownCompany";
+  const entityType = getEntityType(payload) || "UnknownEntity";
+  const eventType = getEventType(payload) || "UnknownEvent";
 
   return companyId + " - " + entityType + " - " + eventType;
 }
@@ -77,12 +99,6 @@ function hasSnsUserAgent(headers) {
 
 function serializeEvent(e) {
   const payload = getEventPayload(e);
-  const companyId =
-    (payload && (payload.companyId || payload.CompanyId || payload.companyID)) || "";
-  const entityType =
-    (payload && (payload.entityType || payload.EntityType)) || "";
-  const eventType =
-    (payload && (payload.eventType || payload.EventType)) || "";
 
   return {
     id: e.id,
@@ -93,9 +109,9 @@ function serializeEvent(e) {
     body: e.body,
     raw: e.raw,
     verified: e.verified,
-    companyId,
-    entityType,
-    eventType,
+    companyId: getCompanyId(payload),
+    entityType: getEntityType(payload),
+    eventType: getEventType(payload),
     hasSnsDot: hasSnsUserAgent(e.headers)
   };
 }
@@ -264,7 +280,7 @@ app.post("/webhook", async (req, res) => {
   return res.status(200).send("OK");
 });
 
-// =================== Health & UI ===================
+// =================== Health & API ===================
 app.get("/health", (_req, res) => {
   res.status(200).json({
     ok: true,
@@ -278,11 +294,9 @@ app.get("/events", (_req, res) => {
   res.status(200).json(events.slice().reverse().map(serializeEvent));
 });
 
+// =================== UI ===================
 app.get("/", (_req, res) => {
   prune();
-
-  const uiEvents = events.slice().reverse().map(serializeEvent);
-  const eventsJson = JSON.stringify(uiEvents).replace(/</g, "\\u003c");
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.end(`<!doctype html>
@@ -599,7 +613,7 @@ app.get("/", (_req, res) => {
   </div>
 
 <script>
-  let events = ${eventsJson};
+  let events = [];
   let selectedEventId = null;
   let activeTab = "sns";
   let activeCompanyFilter = "__all__";
@@ -607,18 +621,18 @@ app.get("/", (_req, res) => {
   function pretty(value) {
     try {
       return JSON.stringify(value, null, 2);
-    } catch {
+    } catch (err) {
       return String(value);
     }
   }
 
   function escapeHtmlClient(str) {
     return String(str)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   function getTabFilteredEvents() {
@@ -661,17 +675,6 @@ app.get("/", (_req, res) => {
     });
   }
 
-  function ensureValidSelection() {
-    const filteredEvents = getFilteredEvents();
-    const selectedStillExists = filteredEvents.some(function (e) {
-      return e.id === selectedEventId;
-    });
-
-    if (!selectedStillExists) {
-      selectedEventId = filteredEvents.length ? filteredEvents[0].id : null;
-    }
-  }
-
   function ensureValidCompanyFilter() {
     const options = getCompanyOptions();
     const exists =
@@ -682,6 +685,17 @@ app.get("/", (_req, res) => {
 
     if (!exists) {
       activeCompanyFilter = "__all__";
+    }
+  }
+
+  function ensureValidSelection() {
+    const filteredEvents = getFilteredEvents();
+    const selectedStillExists = filteredEvents.some(function (e) {
+      return e.id === selectedEventId;
+    });
+
+    if (!selectedStillExists) {
+      selectedEventId = filteredEvents.length ? filteredEvents[0].id : null;
     }
   }
 
@@ -835,12 +849,17 @@ app.get("/", (_req, res) => {
     renderDetail();
   }
 
+  async function loadEvents() {
+    const res = await fetch("/events", { cache: "no-store" });
+    if (!res.ok) {
+      throw new Error("Failed to load events");
+    }
+    events = await res.json();
+  }
+
   async function refreshEvents() {
     try {
-      const res = await fetch("/events", { cache: "no-store" });
-      if (!res.ok) return;
-
-      events = await res.json();
+      await loadEvents();
       ensureValidCompanyFilter();
       ensureValidSelection();
       renderTabs();
@@ -848,7 +867,7 @@ app.get("/", (_req, res) => {
       renderList();
       renderDetail();
     } catch (err) {
-      // Keep current UI state on refresh failures
+      console.error(err);
     }
   }
 
@@ -860,12 +879,12 @@ app.get("/", (_req, res) => {
     renderDetail();
   });
 
-  ensureValidCompanyFilter();
-  ensureValidSelection();
   renderTabs();
   renderCompanyFilter();
   renderList();
   renderDetail();
+
+  refreshEvents();
   setInterval(refreshEvents, 5000);
 </script>
 </body>
