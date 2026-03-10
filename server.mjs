@@ -51,16 +51,39 @@ function parseInnerMessage(body) {
   return candidate;
 }
 
+function getEventPayload(reqOrEventBody) {
+  if (reqOrEventBody && reqOrEventBody.body !== undefined) {
+    return parseInnerMessage(reqOrEventBody.body);
+  }
+  return parseInnerMessage(reqOrEventBody);
+}
+
 function getEventLabel(req) {
-  const payload = parseInnerMessage(req.body);
+  const payload = getEventPayload(req);
+  const companyId =
+    (payload && (payload.companyId || payload.CompanyId || payload.companyID)) || "UnknownCompany";
   const entityType =
     (payload && (payload.entityType || payload.EntityType)) || "UnknownEntity";
   const eventType =
     (payload && (payload.eventType || payload.EventType)) || "UnknownEvent";
-  return "[" + entityType + "] - [" + eventType + "]";
+
+  return companyId + " - " + entityType + " - " + eventType;
+}
+
+function hasSnsUserAgent(headers) {
+  const userAgent = headers && (headers["user-agent"] || headers["User-Agent"]);
+  return userAgent === "Amazon Simple Notification Service Agent";
 }
 
 function serializeEvent(e) {
+  const payload = getEventPayload(e);
+  const companyId =
+    (payload && (payload.companyId || payload.CompanyId || payload.companyID)) || "";
+  const entityType =
+    (payload && (payload.entityType || payload.EntityType)) || "";
+  const eventType =
+    (payload && (payload.eventType || payload.EventType)) || "";
+
   return {
     id: e.id,
     when: new Date(e.ts).toLocaleString(),
@@ -69,7 +92,11 @@ function serializeEvent(e) {
     headers: e.headers,
     body: e.body,
     raw: e.raw,
-    verified: e.verified
+    verified: e.verified,
+    companyId,
+    entityType,
+    eventType,
+    hasSnsDot: hasSnsUserAgent(e.headers)
   };
 }
 
@@ -265,11 +292,21 @@ app.get("/", (_req, res) => {
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>SNS Listener</title>
 <style>
+  * {
+    box-sizing: border-box;
+  }
+
   body {
     font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    max-width: 960px;
-    margin: 2rem auto;
-    padding: 0 1rem;
+    margin: 0;
+    background: #f8fafc;
+    color: #111827;
+  }
+
+  .page {
+    padding: 20px;
+    max-width: 1440px;
+    margin: 0 auto;
   }
 
   .top {
@@ -277,135 +314,295 @@ app.get("/", (_req, res) => {
     gap: 12px;
     align-items: center;
     flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .top h1 {
+    margin: 0;
+    margin-right: 8px;
+    font-size: 28px;
   }
 
   .btn {
     padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
     background: #fff;
     cursor: pointer;
     text-decoration: none;
-    color: #000;
+    color: #111827;
   }
 
   .meta {
-    color: #666;
+    color: #6b7280;
+    font-size: 14px;
+  }
+
+  .intro {
+    margin: 0 0 16px 0;
+    color: #4b5563;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 440px 1fr;
+    gap: 16px;
+    min-height: calc(100vh - 140px);
+  }
+
+  .panel {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid #e5e7eb;
+    font-weight: 600;
+    background: #fcfcfd;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #fcfcfd;
+  }
+
+  .tab-btn {
+    appearance: none;
+    border: 1px solid #d1d5db;
+    background: #ffffff;
+    color: #374151;
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .tab-btn:hover {
+    background: #f9fafb;
+  }
+
+  .tab-btn.active {
+    background: #111827;
+    color: #ffffff;
+    border-color: #111827;
+  }
+
+  .tab-count {
+    opacity: 0.8;
+    margin-left: 6px;
+  }
+
+  .filters {
+    padding: 12px 16px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #ffffff;
+  }
+
+  .filter-label {
+    display: block;
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .filter-select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #fff;
+    color: #111827;
     font-size: 14px;
   }
 
   .event-list {
-    margin-top: 1rem;
     display: grid;
-    gap: 10px;
+    gap: 0;
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
   }
 
   .event-row {
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 12px;
+    border-bottom: 1px solid #f1f5f9;
+    padding: 14px 16px;
     background: #fff;
     cursor: pointer;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
   }
 
   .event-row:hover {
-    background: #f9fafb;
+    background: #f8fafc;
+  }
+
+  .event-row.selected {
+    background: #eff6ff;
+  }
+
+  .event-row-main {
+    min-width: 0;
+    flex: 1;
   }
 
   .event-title {
     font-weight: 600;
+    line-height: 1.35;
+    word-break: break-word;
   }
 
   .event-time {
-    color: #666;
+    color: #6b7280;
     font-size: 13px;
-    margin-top: 4px;
+    margin-top: 6px;
   }
 
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.45);
-    display: none;
-    align-items: center;
-    justify-content: center;
+  .event-dot {
+    width: 10px;
+    height: 10px;
+    min-width: 10px;
+    border-radius: 999px;
+    background: #facc15;
+    margin-top: 6px;
+    box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.2);
+  }
+
+  .event-list-empty {
     padding: 24px;
+    color: #6b7280;
   }
 
-  .modal-backdrop.open {
+  .detail-wrap {
     display: flex;
+    flex-direction: column;
+    min-height: calc(100vh - 220px);
   }
 
-  .modal {
-    width: min(900px, 100%);
-    max-height: 90vh;
-    overflow: auto;
-    background: #fff;
-    border-radius: 12px;
+  .detail-empty {
+    padding: 24px;
+    color: #6b7280;
+  }
+
+  .detail-content {
     padding: 16px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    overflow: auto;
   }
 
-  .modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+  .detail-title {
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 0 8px 0;
+  }
+
+  .detail-subtitle {
+    font-size: 14px;
+    color: #6b7280;
+    margin-bottom: 16px;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
     gap: 12px;
+    margin-bottom: 20px;
   }
 
-  .close-btn {
-    border: 1px solid #ddd;
-    background: #fff;
-    border-radius: 6px;
-    padding: 8px 12px;
-    cursor: pointer;
+  .stat {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 12px;
+    background: #fafafa;
+  }
+
+  .stat-label {
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .stat-value {
+    font-size: 14px;
+    font-weight: 600;
+    word-break: break-word;
+  }
+
+  h3 {
+    margin: 20px 0 8px 0;
+    font-size: 15px;
   }
 
   pre {
+    margin: 0;
     background: #f6f8fa;
     padding: 12px;
     overflow-x: auto;
-    border-radius: 6px;
+    border-radius: 8px;
     white-space: pre-wrap;
     word-break: break-word;
+    border: 1px solid #e5e7eb;
+  }
+
+  @media (max-width: 980px) {
+    .layout {
+      grid-template-columns: 1fr;
+    }
+
+    .event-list,
+    .detail-wrap {
+      max-height: none;
+      min-height: 0;
+    }
   }
 </style>
 </head>
 <body>
-  <div class="top">
-    <h1>AWS SNS Event Listener</h1>
-    <a class="btn" href="/health">Health</a>
-    <button class="btn" id="refreshBtn" type="button">Refresh</button>
-    <span class="meta">Auto-refreshes every 5 seconds without resetting the modal</span>
-  </div>
+  <div class="page">
+    <div class="top">
+      <h1>AWS SNS Event Listener</h1>
+      <a class="btn" href="/health">Health</a>
+      <button class="btn" id="refreshBtn" type="button">Refresh</button>
+      <span class="meta">Auto-refreshes every 5 seconds without resetting your view</span>
+    </div>
 
-  <p>Shows the last 24 hours of webhook calls to <code>POST /webhook</code>. Entries auto-purge and are never persisted.</p>
+    <p class="intro">Shows the last 24 hours of webhook calls to <code>POST /webhook</code>. Entries auto-purge and are never persisted.</p>
 
-  <div id="eventList" class="event-list"></div>
-
-  <div id="modalBackdrop" class="modal-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <div>
-          <div id="modalTitle" class="event-title"></div>
-          <div id="modalTime" class="event-time"></div>
+    <div class="layout">
+      <div class="panel">
+        <div class="panel-header">Events</div>
+        <div id="eventTabs" class="tabs"></div>
+        <div class="filters">
+          <label class="filter-label" for="companyFilter">Company</label>
+          <select id="companyFilter" class="filter-select">
+            <option value="__all__">All Companies</option>
+          </select>
         </div>
-        <button class="close-btn" id="closeBtn" type="button">Close</button>
+        <div id="eventList" class="event-list"></div>
       </div>
 
-      <div id="modalMeta"></div>
-
-      <h3>Headers</h3>
-      <pre id="modalHeaders"></pre>
-
-      <h3>Body</h3>
-      <pre id="modalBody"></pre>
+      <div class="panel">
+        <div class="panel-header">Selected Event</div>
+        <div id="detailWrap" class="detail-wrap"></div>
+      </div>
     </div>
   </div>
 
 <script>
   let events = ${eventsJson};
   let selectedEventId = null;
+  let activeTab = "sns";
+  let activeCompanyFilter = "__all__";
 
   function pretty(value) {
     try {
@@ -424,50 +621,218 @@ app.get("/", (_req, res) => {
       .replaceAll("'", "&#39;");
   }
 
-  function renderList() {
-    const container = document.getElementById("eventList");
+  function getTabFilteredEvents() {
+    return events.filter(function (e) {
+      if (activeTab === "sns") return !!e.hasSnsDot;
+      return !e.hasSnsDot;
+    });
+  }
 
-    if (!events.length) {
-      container.innerHTML = "<p><i>No events yet...</i></p>";
-      return;
+  function getCompanyOptions() {
+    const filteredByTab = getTabFilteredEvents();
+    const unique = Array.from(
+      new Set(
+        filteredByTab
+          .map(function (e) {
+            return (e.companyId || "").trim();
+          })
+          .filter(function (value) {
+            return value;
+          })
+      )
+    );
+
+    unique.sort(function (a, b) {
+      return a.localeCompare(b);
+    });
+
+    return unique;
+  }
+
+  function getFilteredEvents() {
+    const filteredByTab = getTabFilteredEvents();
+
+    if (activeCompanyFilter === "__all__") {
+      return filteredByTab;
     }
 
-    container.innerHTML = events.map(function (e) {
-      return '<div class="event-row" data-id="' + escapeHtmlClient(e.id) + '">' +
-        '<div class="event-title">' + escapeHtmlClient(e.note) + "</div>" +
-        '<div class="event-time">' + escapeHtmlClient(e.when) + ' - id: ' + escapeHtmlClient(e.id) + "</div>" +
-      "</div>";
-    }).join("");
+    return filteredByTab.filter(function (e) {
+      return (e.companyId || "") === activeCompanyFilter;
+    });
+  }
 
-    Array.from(container.querySelectorAll(".event-row")).forEach(function (row) {
-      row.addEventListener("click", function () {
-        openModal(row.dataset.id);
+  function ensureValidSelection() {
+    const filteredEvents = getFilteredEvents();
+    const selectedStillExists = filteredEvents.some(function (e) {
+      return e.id === selectedEventId;
+    });
+
+    if (!selectedStillExists) {
+      selectedEventId = filteredEvents.length ? filteredEvents[0].id : null;
+    }
+  }
+
+  function ensureValidCompanyFilter() {
+    const options = getCompanyOptions();
+    const exists =
+      activeCompanyFilter === "__all__" ||
+      options.some(function (value) {
+        return value === activeCompanyFilter;
+      });
+
+    if (!exists) {
+      activeCompanyFilter = "__all__";
+    }
+  }
+
+  function renderTabs() {
+    const container = document.getElementById("eventTabs");
+    const snsCount = events.filter(function (e) { return !!e.hasSnsDot; }).length;
+    const otherCount = events.filter(function (e) { return !e.hasSnsDot; }).length;
+
+    container.innerHTML =
+      '<button class="tab-btn' + (activeTab === "sns" ? ' active' : '') + '" data-tab="sns" type="button">' +
+        'Data Stream Events <span class="tab-count">(' + snsCount + ')</span>' +
+      '</button>' +
+      '<button class="tab-btn' + (activeTab === "other" ? ' active' : '') + '" data-tab="other" type="button">' +
+        'Other Events <span class="tab-count">(' + otherCount + ')</span>' +
+      '</button>';
+
+    Array.from(container.querySelectorAll(".tab-btn")).forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        activeTab = btn.dataset.tab;
+        ensureValidCompanyFilter();
+        ensureValidSelection();
+        renderTabs();
+        renderCompanyFilter();
+        renderList();
+        renderDetail();
       });
     });
   }
 
-  function openModal(id) {
-    selectedEventId = id;
-    const e = events.find(function (x) {
-      return x.id === id;
-    });
+  function renderCompanyFilter() {
+    const select = document.getElementById("companyFilter");
+    const options = getCompanyOptions();
 
-    if (!e) return;
+    select.innerHTML =
+      '<option value="__all__">All Companies</option>' +
+      options.map(function (companyId) {
+        const selected = companyId === activeCompanyFilter ? ' selected' : '';
+        return '<option value="' + escapeHtmlClient(companyId) + '"' + selected + '>' +
+          escapeHtmlClient(companyId) +
+        '</option>';
+      }).join("");
 
-    document.getElementById("modalTitle").textContent = e.note;
-    document.getElementById("modalTime").textContent = e.when + " - id: " + e.id;
-    document.getElementById("modalMeta").innerHTML =
-      "<p><b>Signature verified:</b> " +
-      (e.verified === true ? "yes" : e.verified === false ? "no" : "unknown") +
-      "</p>";
-    document.getElementById("modalHeaders").textContent = pretty(e.headers);
-    document.getElementById("modalBody").textContent = pretty(e.body);
-    document.getElementById("modalBackdrop").classList.add("open");
+    if (
+      activeCompanyFilter !== "__all__" &&
+      !options.some(function (value) { return value === activeCompanyFilter; })
+    ) {
+      activeCompanyFilter = "__all__";
+      select.value = "__all__";
+    } else {
+      select.value = activeCompanyFilter;
+    }
   }
 
-  function closeModal() {
-    selectedEventId = null;
-    document.getElementById("modalBackdrop").classList.remove("open");
+  function renderList() {
+    const container = document.getElementById("eventList");
+    const filteredEvents = getFilteredEvents();
+
+    if (!filteredEvents.length) {
+      container.innerHTML = '<div class="event-list-empty">No events in this view yet.</div>';
+      return;
+    }
+
+    container.innerHTML = filteredEvents.map(function (e) {
+      const isSelected = e.id === selectedEventId;
+
+      return (
+        '<div class="event-row' + (isSelected ? ' selected' : '') + '" data-id="' + escapeHtmlClient(e.id) + '">' +
+          '<div class="event-row-main">' +
+            '<div class="event-title">' + escapeHtmlClient(e.note) + '</div>' +
+            '<div class="event-time">' + escapeHtmlClient(e.when) + ' - id: ' + escapeHtmlClient(e.id) + '</div>' +
+          '</div>' +
+          (e.hasSnsDot ? '<div class="event-dot" title="Amazon SNS"></div>' : '') +
+        '</div>'
+      );
+    }).join("");
+
+    Array.from(container.querySelectorAll(".event-row")).forEach(function (row) {
+      row.addEventListener("click", function () {
+        selectEvent(row.dataset.id);
+      });
+    });
+  }
+
+  function renderDetail() {
+    const container = document.getElementById("detailWrap");
+    const filteredEvents = getFilteredEvents();
+
+    if (!filteredEvents.length) {
+      container.innerHTML = '<div class="detail-empty">No events in this view yet.</div>';
+      return;
+    }
+
+    let selectedEvent = null;
+
+    if (selectedEventId) {
+      selectedEvent = filteredEvents.find(function (e) {
+        return e.id === selectedEventId;
+      });
+    }
+
+    if (!selectedEvent) {
+      selectedEvent = filteredEvents[0];
+      selectedEventId = selectedEvent.id;
+    }
+
+    container.innerHTML =
+      '<div class="detail-content">' +
+        '<div class="detail-title">' + escapeHtmlClient(selectedEvent.note) + '</div>' +
+        '<div class="detail-subtitle">' + escapeHtmlClient(selectedEvent.when) + ' - id: ' + escapeHtmlClient(selectedEvent.id) + '</div>' +
+
+        '<div class="detail-grid">' +
+          '<div class="stat">' +
+            '<div class="stat-label">Company ID</div>' +
+            '<div class="stat-value">' + escapeHtmlClient(selectedEvent.companyId || "-") + '</div>' +
+          '</div>' +
+          '<div class="stat">' +
+            '<div class="stat-label">Entity Type</div>' +
+            '<div class="stat-value">' + escapeHtmlClient(selectedEvent.entityType || "-") + '</div>' +
+          '</div>' +
+          '<div class="stat">' +
+            '<div class="stat-label">Event Type</div>' +
+            '<div class="stat-value">' + escapeHtmlClient(selectedEvent.eventType || "-") + '</div>' +
+          '</div>' +
+          '<div class="stat">' +
+            '<div class="stat-label">Signature Verified</div>' +
+            '<div class="stat-value">' +
+              (selectedEvent.verified === true ? "yes" : selectedEvent.verified === false ? "no" : "unknown") +
+            '</div>' +
+          '</div>' +
+          '<div class="stat">' +
+            '<div class="stat-label">User Agent</div>' +
+            '<div class="stat-value">' + escapeHtmlClient((selectedEvent.headers && selectedEvent.headers["user-agent"]) || "-") + '</div>' +
+          '</div>' +
+          '<div class="stat">' +
+            '<div class="stat-label">Source</div>' +
+            '<div class="stat-value">' + (selectedEvent.hasSnsDot ? "Amazon SNS" : "Other") + '</div>' +
+          '</div>' +
+        '</div>' +
+
+        '<h3>Headers</h3>' +
+        '<pre>' + escapeHtmlClient(pretty(selectedEvent.headers)) + '</pre>' +
+
+        '<h3>Body</h3>' +
+        '<pre>' + escapeHtmlClient(pretty(selectedEvent.body)) + '</pre>' +
+      '</div>';
+  }
+
+  function selectEvent(id) {
+    selectedEventId = id;
+    renderList();
+    renderDetail();
   }
 
   async function refreshEvents() {
@@ -476,33 +841,31 @@ app.get("/", (_req, res) => {
       if (!res.ok) return;
 
       events = await res.json();
+      ensureValidCompanyFilter();
+      ensureValidSelection();
+      renderTabs();
+      renderCompanyFilter();
       renderList();
-
-      if (selectedEventId) {
-        const stillExists = events.some(function (e) {
-          return e.id === selectedEventId;
-        });
-
-        if (stillExists) {
-          openModal(selectedEventId);
-        } else {
-          closeModal();
-        }
-      }
+      renderDetail();
     } catch (err) {
       // Keep current UI state on refresh failures
     }
   }
 
   document.getElementById("refreshBtn").addEventListener("click", refreshEvents);
-  document.getElementById("closeBtn").addEventListener("click", closeModal);
-  document.getElementById("modalBackdrop").addEventListener("click", function (event) {
-    if (event.target.id === "modalBackdrop") {
-      closeModal();
-    }
+  document.getElementById("companyFilter").addEventListener("change", function (event) {
+    activeCompanyFilter = event.target.value;
+    ensureValidSelection();
+    renderList();
+    renderDetail();
   });
 
+  ensureValidCompanyFilter();
+  ensureValidSelection();
+  renderTabs();
+  renderCompanyFilter();
   renderList();
+  renderDetail();
   setInterval(refreshEvents, 5000);
 </script>
 </body>
