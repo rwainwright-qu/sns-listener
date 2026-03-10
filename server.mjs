@@ -71,23 +71,24 @@ function getCompanyId(payload) {
 }
 
 function getEntityType(payload) {
-  return (
-    (payload && (payload.entityType || payload.EntityType)) || ""
-  );
+  return (payload && (payload.entityType || payload.EntityType)) || "";
 }
 
 function getEventType(payload) {
-  return (
-    (payload && (payload.eventType || payload.EventType)) || ""
-  );
+  return (payload && (payload.eventType || payload.EventType)) || "";
+}
+
+function normalizeStringValue(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
 }
 
 function getEventLabel(req) {
   const payload = getEventPayload(req);
 
-  const companyId = getCompanyId(payload) || "UnknownCompany";
-  const entityType = getEntityType(payload) || "UnknownEntity";
-  const eventType = getEventType(payload) || "UnknownEvent";
+  const companyId = normalizeStringValue(getCompanyId(payload)) || "UnknownCompany";
+  const entityType = normalizeStringValue(getEntityType(payload)) || "UnknownEntity";
+  const eventType = normalizeStringValue(getEventType(payload)) || "UnknownEvent";
 
   return companyId + " - " + entityType + " - " + eventType;
 }
@@ -109,9 +110,9 @@ function serializeEvent(e) {
     body: e.body,
     raw: e.raw,
     verified: e.verified,
-    companyId: getCompanyId(payload),
-    entityType: getEntityType(payload),
-    eventType: getEventType(payload),
+    companyId: normalizeStringValue(getCompanyId(payload)),
+    entityType: normalizeStringValue(getEntityType(payload)),
+    eventType: normalizeStringValue(getEventType(payload)),
     hasSnsDot: hasSnsUserAgent(e.headers)
   };
 }
@@ -635,6 +636,11 @@ app.get("/", (_req, res) => {
       .replace(/'/g, "&#39;");
   }
 
+  function normalizeCompanyId(value) {
+    if (value === null || value === undefined) return "";
+    return String(value).trim();
+  }
+
   function getTabFilteredEvents() {
     return events.filter(function (e) {
       if (activeTab === "sns") return !!e.hasSnsDot;
@@ -648,7 +654,7 @@ app.get("/", (_req, res) => {
       new Set(
         filteredByTab
           .map(function (e) {
-            return (e.companyId || "").trim();
+            return normalizeCompanyId(e.companyId);
           })
           .filter(function (value) {
             return value;
@@ -671,7 +677,7 @@ app.get("/", (_req, res) => {
     }
 
     return filteredByTab.filter(function (e) {
-      return (e.companyId || "") === activeCompanyFilter;
+      return normalizeCompanyId(e.companyId) === activeCompanyFilter;
     });
   }
 
